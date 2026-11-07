@@ -18,7 +18,7 @@ What each fix does:
 Keys the agent needs to run, keys in databases, and keys inside skills are
 never changed here.
 
-Python 3.6+ standard library only. Works on macOS, Linux and Windows.
+Python 3.9+ standard library only. Works on macOS, Linux and Windows.
 """
 
 import argparse

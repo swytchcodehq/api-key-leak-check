@@ -6,7 +6,7 @@ memory, chat history and backups, and in the user's shell startup files. It
 never changes anything, makes no network calls, and never prints a full
 secret: a key is only ever described by its first 4 characters and length.
 
-Python 3.6+ standard library only. Works on macOS, Linux and Windows.
+Python 3.9+ standard library only. Works on macOS, Linux and Windows.
 
   audit.py              short summary in plain words
   audit.py --details    where each problem is and how to fix it
@@ -24,6 +24,8 @@ import stat
 import sys
 from collections import Counter, OrderedDict
 from datetime import datetime
+
+__version__ = "1.0.0"
 
 MAX_TEXT_BYTES = 5 * 1024 * 1024      # read text files up to this size
 MAX_BINARY_BYTES = 400 * 1024 * 1024  # byte-scan databases up to this size
@@ -669,6 +671,25 @@ def plural(n, one, many=None):
     return one if n == 1 else (many or one + "s")
 
 
+AGENT_NAMES = {"openclaw": "OpenClaw", "hermes": "Hermes"}
+
+
+def agent_label(items):
+    """Which agent(s) a set of findings came from, e.g. "Hermes and OpenClaw".
+    None for findings outside any agent (terminal startup files)."""
+    names = sorted({AGENT_NAMES[f["platform"]] for f in items if f.get("platform") in AGENT_NAMES})
+    return " and ".join(names) if names else None
+
+
+def name_agent(text, label):
+    """Say which agent a sentence is about: "your agent's" -> "your Hermes agent's"."""
+    for a, b in (("Your agent", "Your %s agent"), ("your agent", "your %s agent"),
+                 ("Some of your skills", "Some of your %s skills"), ("A skill you installed", "A %s skill you installed")):
+        if a in text:
+            return text.replace(a, b % label, 1)
+    return text
+
+
 def summarize(audit, targets):
     by_group = OrderedDict((g, [f for f in audit.findings if f["group"] == g]) for g in GROUPS)
     by_group = OrderedDict((g, v) for g, v in by_group.items() if v)
@@ -676,8 +697,11 @@ def summarize(audit, targets):
     def provs(items):
         return [nice(p) for f in items for p in f.get("provider", "").split(",") if p and p not in ("-", "unknown")]
 
+    # Only name the agent when there's more than one to tell apart.
+    several_agents = len(targets) > 1
     lines = []
     for g, items in by_group.items():
+        before = len(lines)
         n_keys = len({f.get("fingerprint") for f in items if f["kind"] == "secret"})
         skills = [f.get("skill") for f in items]
         p = join_names(provs(items))
@@ -711,10 +735,22 @@ def summarize(audit, targets):
                             plural(len(set(provs(items))), "key"), join_names(skills)))
         elif g == "agent-logins":
             pass  # normal; shown only in details
+        label = agent_label(items)
+        if several_agents and label and len(lines) > before:
+            line = lines[-1]
+            if line.startswith("URGENT: "):
+                lines[-1] = "URGENT: [%s] %s" % (label, line[len("URGENT: "):])
+            else:
+                lines[-1] = "[%s] %s" % (label, line)
 
     worst = next((GROUPS[g]["level"] for g in by_group if GROUPS[g]["level"] != "info"), None)
     status = {"urgent": "ACTION NEEDED", "high": "ACTION NEEDED", "medium": "WORTH FIXING"}.get(worst, "ALL CLEAR")
     headline = make_headline(by_group, provs)
+    # Name the agent in the headline only when it's about one of them; the
+    # tagged lines below say which agent each problem is in.
+    subject_agent = agent_label(headline_subject(by_group))
+    if several_agents and subject_agent and " and " not in subject_agent:
+        headline = name_agent(headline, subject_agent)
 
     options = []
     fixable_here = any(f["action"] in ("lock", "delete", "remove-line", "blank") and f["group"] != "app-keys"
@@ -744,7 +780,8 @@ def summarize(audit, targets):
         "found": lines[:6],
         "more_found": max(0, len(lines) - 6),
         "options": options,
-        "groups": [{"group": g, "level": GROUPS[g]["level"], "title": GROUPS[g]["title"], "count": len(v)}
+        "groups": [{"group": g, "level": GROUPS[g]["level"], "title": GROUPS[g]["title"], "count": len(v),
+                    "agents": agent_label(v)}
                    for g, v in by_group.items()],
         "findings": [{k: v for k, v in f.items() if k != "abspath"} for f in
                      sorted(audit.findings, key=lambda f: (list(GROUPS).index(f["group"]), f["path"], f["line"]))],
@@ -752,15 +789,32 @@ def summarize(audit, targets):
         "agents": [t[0] for t in targets],
         "files_checked": sum(audit.scanned.values()),
         "notes": audit.notes,
+        "version": __version__,
         "generated": datetime.now().isoformat(timespec="seconds"),
     }
 
 
+def first_prov(items):
+    """The provider a headline leads with: app keys before the agent's own, Stripe first."""
+    ps = [f.get("provider") for f in items if f.get("provider") not in (None, "-", "unknown")]
+    ps.sort(key=lambda p: (p in AGENT_OWN, p != "stripe"))
+    return ps[0] if ps else None
+
+
+def headline_subject(by_group):
+    """The findings the headline is about, so it can name the right agent."""
+    g = next((g for g in by_group if GROUPS[g]["level"] != "info"), None)
+    if not g:
+        return []
+    items = by_group[g]
+    if g in ("memory", "skill-secret", "app-keys", "shell"):
+        p = first_prov(items)
+        if p:
+            return [f for f in items if f.get("provider") == p]
+    return items
+
+
 def make_headline(by_group, provs):
-    def first_prov(items, third_party_first=True):
-        ps = [f.get("provider") for f in items if f.get("provider") not in (None, "-", "unknown")]
-        ps.sort(key=lambda p: (p in AGENT_OWN, p != "stripe"))
-        return ps[0] if ps else None
 
     def impact(p):
         return PROVIDERS.get(p, (None, "use that account as you", None))[1]
@@ -862,6 +916,8 @@ def render_details(rep):
             else:
                 what = 'Skill "%s" uses your %s key' % (f["skill"], join_names([nice(p) for p in f["provider"].split(",")]))
             out.append("   - %s" % what)
+            if f.get("platform") in AGENT_NAMES:
+                out.append("     Agent: %s" % AGENT_NAMES[f["platform"]])
             out.append("     Where: %s" % where)
             out.append("     Fix: %s" % fix_text(f))
         out.append("")
@@ -881,7 +937,7 @@ def render_markdown(rep):
     if rep["options"]:
         lines += ["## What you can do", ""] + ["%d. %s" % (i, o) for i, o in enumerate(rep["options"], 1)] + [""]
     lines += ["## Details", "", "```", render_details(rep), "```", "",
-              "_Made by the read-only api-key-leak-check skill on %s._" % rep["generated"], ""]
+              "_Made by the read-only api-key-leak-check skill %s on %s._" % (rep["version"], rep["generated"]), ""]
     return "\n".join(lines)
 
 
@@ -896,6 +952,7 @@ def ascii_safe(stream):
 
 def main():
     ap = argparse.ArgumentParser(description="Read-only security check for OpenClaw and Hermes agents.")
+    ap.add_argument("--version", action="version", version="api-key-leak-check " + __version__)
     ap.add_argument("--details", action="store_true", help="show where each problem is and how to fix it")
     ap.add_argument("--json", action="store_true", help="full result for the agent, including fix ids")
     ap.add_argument("--markdown", metavar="FILE", help="also save a shareable report")

@@ -1,5 +1,7 @@
 # API Key Leak Check for OpenClaw and Hermes
 
+[![tests](https://github.com/swytchcodehq/api-key-leak-check/actions/workflows/test.yml/badge.svg)](https://github.com/swytchcodehq/api-key-leak-check/actions/workflows/test.yml)
+
 **Is your AI agent leaking your API keys?** A free, read-only security check for [OpenClaw](https://openclaw.ai) and [Hermes](https://hermes-agent.nousresearch.com) agents. By [Swytchcode](https://swytchcode.com).
 
 Ask your agent: *"Is my setup leaking any keys?"*
@@ -45,8 +47,29 @@ It recognises keys for Stripe, GitHub, GitLab, Slack, AWS, Google, OpenAI, Anthr
 - **The check only reads.** No network calls. A key is never shown, only its first 4 characters.
 - **Fixes need your yes.** The agent shows what will change and waits. It never makes backup copies of your keys.
 - **Your agent's own keys stay put.** It needs them to run, so the check only makes sure they're locked.
-- **Nothing to install.** Python 3.6 or newer, standard library only. macOS, Linux and Windows.
+- **Nothing to install.** Python 3.9 or newer, standard library only. Tested on macOS, Linux and Windows on every change.
 - **Read the code.** It's two short scripts: [`audit.py`](skills/api-key-leak-check/scripts/audit.py) finds problems, [`fix.py`](skills/api-key-leak-check/scripts/fix.py) fixes one item at a time after you say yes.
+- **Passes Hermes's install check.** Hermes scans every skill it installs from GitHub and rates this one safe.
+
+## Verify it yourself
+
+You don't have to take our word for it. These take a few seconds.
+
+**It can't send anything anywhere.** List everything the scripts import:
+
+```
+grep -hE "^(import|from) " skills/api-key-leak-check/scripts/*.py | sort -u
+```
+
+On Windows (PowerShell): `Select-String -Path skills\api-key-leak-check\scripts\*.py -Pattern '^(import|from) '`
+
+You'll see only Python's own file and text modules (`os`, `re`, `json`, `hashlib` and so on), plus `audit`, which is the other script. There's no `socket`, `urllib`, `http`, `requests` or `subprocess`. The tests also check that the scripts never use `os.system`, `eval` or the other ways Python can run a program or load hidden code. Together that means the scripts can't reach the internet or start anything else. Both checks run on every change.
+
+**It finds keys and never prints them.** Run the tests. They build a fake agent, plant fake keys, and check that each one is found and that no full key appears in any output:
+
+```
+python3 -m unittest discover -s tests -v
+```
 
 ## Install
 
@@ -54,9 +77,9 @@ It recognises keys for Stripe, GitHub, GitLab, Slack, AWS, Google, OpenAI, Anthr
 
 In a Hermes chat:
 ```
-/skills install swytchcodehq/api-key-leak-check/skills/api-key-leak-check
+/skills install swytchcodehq/api-key-leak-check/api-key-leak-check
 ```
-Or in a terminal: `hermes skills install swytchcodehq/api-key-leak-check/skills/api-key-leak-check`
+Or in a terminal: `hermes skills install swytchcodehq/api-key-leak-check/api-key-leak-check`
 
 ### OpenClaw
 
@@ -100,6 +123,14 @@ python3 skills/api-key-leak-check/scripts/audit.py --markdown ~/security-check.m
 
 On Windows, use `python` or `py` if `python3` isn't found.
 
-## About Swytchcode
+## Who makes this
 
-For app keys like Stripe, GitHub and Notion, the check can offer to move them to [Swytchcode](https://swytchcode.com). Swytchcode holds them for your agent, so the agent never has them, and asks you before anything risky. It's optional: nothing is set up unless you say yes.
+[Swytchcode](https://swytchcode.com) makes this check. It's free, and it works fully without Swytchcode.
+
+For app keys like Stripe, GitHub and Notion, the check offers Swytchcode once, as an optional last step: Swytchcode holds those keys for your agent, so the agent never has them, and asks you before anything risky. Your agent never installs or sets up Swytchcode unless you say yes, and doesn't bring it up again if you say no.
+
+## Security and releases
+
+- Found a problem? Please report it privately. See [SECURITY.md](SECURITY.md).
+- Changes for each version are in [CHANGELOG.md](CHANGELOG.md). To use a specific version, clone it by tag, for example `git clone --branch v1.0.0 https://github.com/swytchcodehq/api-key-leak-check`.
+- MIT licensed. See [LICENSE](LICENSE).

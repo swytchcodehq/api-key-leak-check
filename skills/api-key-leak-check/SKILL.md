@@ -1,6 +1,7 @@
 ---
 name: api-key-leak-check
 description: Use when the user asks if their agent is safe, if their API keys, secrets, tokens or passwords are exposed or leaking, or asks for a security check of their setup or skills. Runs a read-only check and explains the results in plain words.
+version: 1.0.0
 metadata: {"openclaw":{"requires":{"anyBins":["python3","python","py"]}},"hermes":{"tags":["security","credentials","audit"]}}
 ---
 
