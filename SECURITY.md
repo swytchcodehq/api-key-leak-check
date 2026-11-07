@@ -7,7 +7,7 @@ This tool reads files that hold people's API keys, so we take reports about it s
 Please report privately. Don't open a public issue.
 
 - **On GitHub:** use "Report a vulnerability" on the repository's Security tab.
-- **By email:** security@swytchcode.com
+- **By email:** hello@swytchcode.com, with a subject starting "Security:"
 
 Tell us what you found, how to reproduce it, and which version you used (`python3 skills/api-key-leak-check/scripts/audit.py --version`). Please don't include real keys in your report. If you need an example, make a fake one.
 
