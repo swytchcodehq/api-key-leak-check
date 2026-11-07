@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Security reports by email now go to hello@swytchcode.com, with a subject starting "Security:".
+
 ## 1.0.0 (2026-11-07)
 
 First release.
