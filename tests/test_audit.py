@@ -506,6 +506,70 @@ class AfterSwytchcode(Base):
         self.assertIn("Optional: let Swytchcode hold your app keys", self.audit())
 
 
+@unittest.skipUnless(POSIX, "the command is for Mac and Linux shells")
+class MovesAKey(Base):
+    def only_finding(self, provider):
+        found = [f for f in self.audit_json()["findings"] if f.get("provider") == provider]
+        self.assertEqual(len(found), 1, found)
+        return found[0]
+
+    def value_from(self, command):
+        """Runs the command up to the last pipe: what Swytchcode would receive."""
+        self.assertTrue(command.endswith(" --json"), command)
+        reader = command.rsplit(" | swytchcode ", 1)[0]
+        p = subprocess.run(["sh", "-c", reader], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
+        self.assertEqual(p.stderr.decode(), "")
+        return p.stdout.decode().strip()
+
+    def assert_moves(self, rel, line_template):
+        key = self.key("sk_live_", 30)
+        self.write(rel, "OTHER=1\n" + line_template % key + "\nLAST=2\n")
+        finding = self.only_finding("stripe")
+        command = finding["connect_command"]
+        self.assertIn("swytchcode auth connect stripe --json", command)
+        self.assertEqual(self.value_from(command), key)
+        self.assert_no_full_key(json.dumps(finding))
+
+    def test_plain_line(self):
+        self.assert_moves(".hermes/.env", "STRIPE_API_KEY=%s")
+
+    def test_double_quotes(self):
+        self.assert_moves(".hermes/.env", 'STRIPE_API_KEY="%s"')
+
+    def test_single_quotes_and_comment(self):
+        self.assert_moves(".hermes/.env", "STRIPE_API_KEY='%s'  # billing")
+
+    def test_startup_file_export(self):
+        self.write(".hermes/config.yaml", "model: x\n")
+        self.assert_moves(".bashrc", "export STRIPE_API_KEY=%s")
+
+    def test_folder_with_a_space_and_quote(self):
+        key = self.key("sk_live_", 30)
+        self.env["HERMES_HOME"] = os.path.join(self.home, "my 'agent")
+        self.write("my 'agent/.env", "STRIPE_API_KEY=%s\n" % key)
+        self.assertEqual(self.value_from(self.only_finding("stripe")["connect_command"]), key)
+
+    def test_none_when_the_line_has_no_single_value(self):
+        self.write(".hermes/.env", "our billing key is %s for now\n" % self.key("sk_live_", 30))
+        self.assertIsNone(self.only_finding("stripe")["connect_command"])
+
+    def test_none_for_the_agents_own_key(self):
+        self.write(".hermes/.env", "OPENROUTER_API_KEY=%s\n" % self.key("sk-or-v1-", 64))
+        self.assertIsNone(self.only_finding("openrouter")["connect_command"])
+
+    def test_none_for_a_login_with_two_parts(self):
+        self.write(".hermes/.env", "AWS_ACCESS_KEY_ID=%s\n" % self.key("AKIA", 16).upper())
+        self.assertIsNone(self.only_finding("aws")["connect_command"])
+
+    def test_none_outside_settings_and_startup_files(self):
+        self.write(".hermes/memories/MEMORY.md", "STRIPE_API_KEY=%s\n" % self.key("sk_live_", 30))
+        self.assertIsNone(self.only_finding("stripe")["connect_command"])
+
+    def test_no_promise_about_asking_first(self):
+        self.write(".hermes/.env", "NOTION_API_KEY=%s\n" % self.key("ntn_", 44))
+        self.assertNotIn("risky", self.audit())
+
+
 class Version(unittest.TestCase):
     def test_versions_match(self):
         with open(AUDIT, encoding="utf-8") as fh:

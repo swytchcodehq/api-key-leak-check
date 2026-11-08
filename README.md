@@ -24,7 +24,7 @@ What you can do:
 2. Replace the exposed keys: make new ones at Stripe and turn off the old ones.
    This takes a few minutes each, on their websites.
 3. Optional: let Swytchcode hold your app keys (Stripe), so your agent never
-   has them and asks you before risky actions.
+   has them. Your agent can set it up for you.
 
 Say "show me the details" to see where each one is.
 
@@ -146,7 +146,9 @@ On Windows, use `python` or `py` if `python3` isn't found.
 
 [Swytchcode](https://swytchcode.com) makes this check. It's free, and it works fully without Swytchcode.
 
-For app keys like Stripe, GitHub and Notion, the check offers Swytchcode once, as an optional last step: Swytchcode holds those keys for your agent, so the agent never has them, and asks you before anything risky. Your agent never installs or sets up Swytchcode unless you say yes, and doesn't bring it up again if you say no.
+For app keys like Stripe, GitHub and Notion, the check offers Swytchcode once, as an optional last step: Swytchcode holds those keys on your computer, so the agent no longer has them. If you say yes, your agent does the move for you. On Mac and Linux, a key on a simple `NAME=value` line goes straight from the file to Swytchcode without appearing in the chat. On Windows, and for other keys, you enter it yourself in your own terminal, never in the chat. You sign in once with a free account, which includes 1,000 live commands a month. After that, those apps stop working until the next month or a paid plan.
+
+The move doesn't add approvals: your agent still acts on those apps without checking with you first, as it did before. Your agent never installs or sets up Swytchcode unless you say yes, and doesn't bring it up again if you say no.
 
 ## Security and releases
 

@@ -25,7 +25,7 @@ import sys
 from collections import Counter, OrderedDict
 from datetime import datetime
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 
 MAX_TEXT_BYTES = 5 * 1024 * 1024      # read text files up to this size
 MAX_BINARY_BYTES = 400 * 1024 * 1024  # byte-scan databases up to this size
@@ -258,6 +258,37 @@ def user_home():
 def tilde(path):
     home = user_home()
     return "~" + path[len(home):] if path.startswith(home) else path
+
+
+# Apps whose login is more than one value, so a single key can't be handed over.
+MULTI_PART_LOGINS = {"aws", "twilio", "shopify", "razorpay"}
+TAKE_VALUE = r"""sed -E 's/^[^=]*=[[:space:]]*//; s/^["'"'"']//; s/["'"'"'[:space:]#].*$//'"""
+
+
+def value_on_line(line):
+    """What TAKE_VALUE leaves of a line. Keep the two in step."""
+    value = re.sub(r"^[^=]*=[ \t\r\f\v]*", "", line, count=1)
+    value = re.sub(r"^[\"']", "", value, count=1)
+    return re.sub(r"[\"'\s#].*$", "", value, count=1, flags=re.S)
+
+
+def connect_command(path, line, raw, prov):
+    """A shell line that moves one key into Swytchcode without showing it, or None.
+
+    The agent runs this instead of opening the file, so the key never reaches the
+    chat. Only offered when the line really yields this exact key.
+    """
+    if os.name == "nt" or prov in MULTI_PART_LOGINS or prov not in KNOWN_THIRD_PARTY or prov in AGENT_OWN:
+        return None
+    try:
+        with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+            lines = fh.read(MAX_TEXT_BYTES).split("\n")
+    except OSError:
+        return None
+    if line < 1 or line > len(lines) or value_on_line(lines[line - 1]) != raw:
+        return None
+    quoted = "'" + path.replace("'", "'\"'\"'") + "'"
+    return "sed -n '%dp' %s | %s | swytchcode auth connect %s --json" % (line, quoted, TAKE_VALUE, prov)
 
 
 def nice(prov):
@@ -551,7 +582,9 @@ class Audit:
                  own_key=own, skill=self._skill if area == "skills" else None,
                  in_prompt=self._in_prompt and area == "memory",
                  path=tilde(path), abspath=path, line=line, action=action,
-                 rotate=exposed and prov not in ("gateway", "unknown"))
+                 rotate=exposed and prov not in ("gateway", "unknown"),
+                 connect_command=(connect_command(path, line, raw, prov)
+                                  if group in ("app-keys", "shell") and line_file and not binary else None))
         return 1
 
     def scan_file(self, path, area, platform, generic=True):
@@ -982,8 +1015,8 @@ def summarize(audit, targets):
             options.append("Swytchcode is installed for your agent: let it hold your %s keys too, "
                            "so your agent never has them." % apps)
         else:
-            options.append("Optional: let Swytchcode hold your app keys (%s), so your agent never has them "
-                           "and asks you before risky actions." % apps)
+            options.append("Optional: let Swytchcode hold your app keys (%s), so your agent never has them. "
+                           "Your agent can set it up for you." % apps)
 
     return {
         "status": status,
