@@ -101,7 +101,7 @@ Copy-Item -Recurse $HOME\api-key-leak-check\skills\api-key-leak-check $HOME\.ope
 ```
 npx skills add swytchcodehq/api-key-leak-check
 ```
-It asks which agents to install it for. The check itself looks at OpenClaw and Hermes only.
+When it asks which agents, pick OpenClaw or Hermes. When it asks for the installation scope, pick **Global**: a Project install goes into the folder you're in, which Hermes and OpenClaw don't read. If your agent isn't in the list, use the steps above instead. The check itself looks at OpenClaw and Hermes only.
 
 ### Both agents from one copy
 
