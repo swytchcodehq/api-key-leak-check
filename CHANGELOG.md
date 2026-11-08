@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.0.3 (2026-11-08)
+
+- The description says it's for OpenClaw and Hermes agents, so people browsing skills.sh, used mostly by coding tools, can tell before installing.
+- README: install with `npx skills add swytchcodehq/api-key-leak-check`.
+- Version numbers match the release again. The v1.0.2 release still reported 1.0.1.
+
+## 1.0.2 (2026-11-08)
 
 - Keys in the agent's memory now say they're sent to the AI provider with every message, for the files Hermes and OpenClaw put into every prompt. Other memory notes say "memory notes", not "chat history".
 - On Ubuntu and most Linux systems, files readable only by your own private group are no longer reported as open to other accounts. Any other group, or a file owned by another account, still is.
