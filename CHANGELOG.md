@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.4 (not released yet)
+## 1.0.4 (2026-11-08)
 
 - Skills linked in instead of copied (as `npx skills add` can do) are checked too. Before, a linked skill folder was skipped, so a key inside it was missed. Link loops are handled.
 - Passwords shorter than 20 characters in settings and notes are found, such as `DB_PASSWORD=hunter22x`. References like `${DB_PASSWORD}`, setting names and code like `get_password()` are not flagged.
