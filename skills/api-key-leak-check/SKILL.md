@@ -1,7 +1,7 @@
 ---
 name: api-key-leak-check
-description: Check OpenClaw and Hermes agents for leaked or exposed API keys, secrets, tokens and passwords in the agent's memory, chat history, skills and settings. Use when the user asks if they're leaking keys, if their agent is safe, or for a security check. Read-only; explains the results in plain words.
-version: 1.0.3
+description: Check OpenClaw and Hermes agents for leaked or exposed API keys and tokens in the agent's memory, chat history, skills and settings, and for passwords in its notes and settings. Use when the user asks if they're leaking keys, if their agent is safe, or for a security check. Read-only; explains the results in plain words.
+version: 1.0.4
 metadata: {"openclaw":{"requires":{"anyBins":["python3","python","py"]}},"hermes":{"tags":["security","credentials","audit"]}}
 ---
 

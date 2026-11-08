@@ -25,7 +25,7 @@ import sys
 from collections import Counter, OrderedDict
 from datetime import datetime
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 MAX_TEXT_BYTES = 5 * 1024 * 1024      # read text files up to this size
 MAX_BINARY_BYTES = 400 * 1024 * 1024  # byte-scan databases up to this size
@@ -64,6 +64,17 @@ GENERIC_ASSIGN = re.compile(
     ["']?([A-Za-z0-9_\-./+=:]{20,})["']?
     """
 )
+
+# password = value, for passwords too short for GENERIC_ASSIGN. The value may
+# hold symbols, so it runs to the next space, quote or separator.
+PASSWORD_ASSIGN = re.compile(
+    r"""(?imx)
+    ["']?([A-Za-z0-9_.\-]*(?:passw(?:or)?d|passwd|pwd|passphrase))["']?
+    \s*[:=]\s*
+    (["']?)([^\s"',;]{8,128})\2(?=[\s"',;]|$)
+    """
+)
+ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Lowercase words joined by underscores: in code, a function or variable name,
 # not a key. Only skipped in code files: in settings it can be a password.
@@ -289,18 +300,28 @@ def is_ignored_host(host):
         any(h in host for h in IGNORED_HOSTS if "." not in h)
 
 
-def walk(root, skip_dirs=SKIP_DIRS, max_depth=8):
+def walk(root, skip_dirs=SKIP_DIRS, max_depth=8, follow_links=False):
+    """Files under root. Links are skipped unless follow_links, which skill
+    folders need: installers like `npx skills add` link a skill in instead of
+    copying it. Each real folder is visited once, so a link loop can't hang."""
     if not os.path.isdir(root):
         return
     root_depth = root.rstrip(os.sep).count(os.sep)
     count = 0
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    seen = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=follow_links):
+        if follow_links:
+            real = os.path.realpath(dirpath)
+            if real in seen:
+                dirnames[:] = []
+                continue
+            seen.add(real)
         dirnames[:] = [d for d in dirnames if d not in skip_dirs]
         if dirpath.count(os.sep) - root_depth >= max_depth:
             dirnames[:] = []
         for f in filenames:
             p = os.path.join(dirpath, f)
-            if os.path.islink(p):
+            if os.path.islink(p) and not (follow_links and os.path.isfile(p)):
                 continue
             count += 1
             if count > MAX_FILES_PER_WALK:
@@ -466,6 +487,22 @@ class Audit:
             if area == "config" and os.path.basename(path) in AGENT_AUTH_FILES:
                 prov = "gateway"
             found += self._secret(path, line, area, platform, prov, value, False, False)
+        for m in PASSWORD_ASSIGN.finditer(text):
+            quoted, value = m.group(2), m.group(3)
+            start = len(text[:m.start(3)].encode("utf-8", "replace"))
+            if any(s <= start < e for s, e in spans):
+                continue
+            if code_file and not quoted:  # password = get_password(): code, not a password
+                continue
+            if (value[0] in "$%{<!&*/~." or ENV_NAME.match(value) or looks_placeholder(value)
+                    or value.lower() in ("true", "false", "null", "none") or entropy(value) < 2.5):
+                continue  # a reference to a password kept elsewhere, or a placeholder
+            if value.count("/") > 2 or value.startswith(("http:", "https:")):
+                continue
+            if code_file and SNAKE_WORDS.match(value):
+                continue
+            line = base_line + text.count("\n", 0, m.start())
+            found += self._secret(path, line, area, platform, "unknown", value, False, False)
         return found
 
     def _secret(self, path, line, area, platform, prov, raw, test, binary):
@@ -555,7 +592,7 @@ class Audit:
     def scan_skill_dir(self, skills_root, platform):
         if not os.path.isdir(skills_root):
             return
-        for skill_md in walk(skills_root, max_depth=6):
+        for skill_md in walk(skills_root, max_depth=6, follow_links=True):
             if os.path.basename(skill_md) != "SKILL.md":
                 continue
             folder = os.path.dirname(skill_md)
@@ -570,7 +607,7 @@ class Audit:
         self._skill = name
         providers, env_keys = set(), set()
         prints_secret = dumps_config = deletes = hardcoded = has_scripts = False
-        for path in walk(folder, max_depth=4):
+        for path in walk(folder, max_depth=4, follow_links=True):
             data = read_text(path)
             if data is None:
                 continue

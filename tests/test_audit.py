@@ -320,6 +320,41 @@ class MoreWhere(Base):
         rep = self.audit_json()
         self.assertTrue([f for f in rep["findings"] if f["kind"] == "secret"])
 
+    def test_short_password_in_settings_is_found(self):
+        self.write(".hermes/.env", "DB_PASSWORD=hunter22x\n")
+        self.write(".hermes/config.yaml", 'smtp_password: "p@ss!w0rd9"\n')
+        rep = self.audit_json()
+        self.assertEqual(len([f for f in rep["findings"] if f["kind"] == "secret"]), 2)
+        self.assertNotEqual(rep["status"], "ALL CLEAR")
+        self.assertNotIn("hunter22x", self.audit("--details"))
+
+    def test_password_references_are_not_passwords(self):
+        self.write(".hermes/config.yaml", "password: ${DB_PASSWORD}\npassword_env: DB_PASS\n"
+                   "admin_password: changeme123\n")
+        self.write(".hermes/.env", "PWD=/home/me/project\n")
+        self.write(".hermes/skills/tool/SKILL.md", "---\nname: tool\ndescription: t\n---\nRun it.\n")
+        self.write(".hermes/skills/tool/scripts/run.py", "password = get_password()\npwd = os.getcwd()\n")
+        self.assertEqual(self.audit_json()["status"], "ALL CLEAR")
+
+    @unittest.skipUnless(POSIX, "links need extra rights on Windows")
+    def test_linked_skill_folder_is_checked(self):
+        # `npx skills add` can link a skill in from ~/.agents/skills.
+        self.write(".agents/skills/billing/SKILL.md", "---\nname: billing\ndescription: b\n---\n"
+                   "Use key %s\n" % self.key("sk_live_", 40))
+        os.makedirs(os.path.join(self.home, ".openclaw", "skills"))
+        self.write(".openclaw/openclaw.json", "{}\n")
+        os.symlink(os.path.join(self.home, ".agents", "skills", "billing"),
+                   os.path.join(self.home, ".openclaw", "skills", "billing"))
+        rep = self.audit_json()
+        self.assertTrue([f for f in rep["findings"] if f["group"] == "skill-secret" and f["skill"] == "billing"])
+
+    @unittest.skipUnless(POSIX, "links need extra rights on Windows")
+    def test_link_loop_in_a_skill_does_not_hang(self):
+        self.write(".hermes/skills/loop/SKILL.md", "---\nname: loop\ndescription: l\n---\nHi.\n")
+        os.symlink(os.path.join(self.home, ".hermes", "skills", "loop"),
+                   os.path.join(self.home, ".hermes", "skills", "loop", "again"))
+        self.assertEqual(self.audit_json()["status"], "ALL CLEAR")
+
     def test_openclaw_readme_is_not_sent_with_every_message(self):
         self.write(".openclaw/workspace/README.md", "github: %s\n" % self.key("ghp_", 36))
         out = self.audit()

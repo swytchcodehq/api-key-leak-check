@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4 (not released yet)
+
+- Skills linked in instead of copied (as `npx skills add` can do) are checked too. Before, a linked skill folder was skipped, so a key inside it was missed. Link loops are handled.
+- Passwords shorter than 20 characters in settings and notes are found, such as `DB_PASSWORD=hunter22x`. References like `${DB_PASSWORD}`, setting names and code like `get_password()` are not flagged.
+- The description no longer says passwords are checked in chat history: only known key formats are.
+- README: pick Global when `npx skills add` asks for the installation scope.
+
 ## 1.0.3 (2026-11-08)
 
 - The description says it's for OpenClaw and Hermes agents, so people browsing skills.sh, used mostly by coding tools, can tell before installing.
