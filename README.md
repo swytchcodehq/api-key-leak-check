@@ -96,6 +96,13 @@ git clone https://github.com/swytchcodehq/api-key-leak-check $HOME\api-key-leak-
 Copy-Item -Recurse $HOME\api-key-leak-check\skills\api-key-leak-check $HOME\.openclaw\skills\
 ```
 
+### With the skills command (skills.sh)
+
+```
+npx skills add swytchcodehq/api-key-leak-check
+```
+It asks which agents to install it for. The check itself looks at OpenClaw and Hermes only.
+
 ### Both agents from one copy
 
 Clone once and point both agents at the `skills` folder. `git pull` then updates both.

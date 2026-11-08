@@ -25,7 +25,7 @@ import sys
 from collections import Counter, OrderedDict
 from datetime import datetime
 
-__version__ = "1.0.1"
+__version__ = "1.0.3"
 
 MAX_TEXT_BYTES = 5 * 1024 * 1024      # read text files up to this size
 MAX_BINARY_BYTES = 400 * 1024 * 1024  # byte-scan databases up to this size
