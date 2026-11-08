@@ -175,7 +175,9 @@ SHELL_PROFILES = [".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", 
 TEXT_EXT = {".md", ".txt", ".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".json", ".json5",
             ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".log", ".ps1", ".rb",
             ".go", ".html", ".xml", ".csv", ".fish", ""}
-BINARY_SCAN_EXT = {".db", ".sqlite", ".sqlite3"}
+# Databases, and their write-ahead logs: a running Hermes keeps recent chats in
+# state.db-wal until SQLite moves them into state.db.
+BINARY_SCAN_EXT = {".db", ".sqlite", ".sqlite3", ".db-wal", ".sqlite-wal", ".sqlite3-wal"}
 SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "image_cache", "audio_cache",
              "hermes-agent", "node", "bin", "cache", ".cache", "dist", "build", "site-packages"}
 

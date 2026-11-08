@@ -255,9 +255,30 @@ class MoreWhere(Base):
         db.commit()
         db.close()
         rep = self.audit_json()
-        found = [f for f in rep["findings"] if f["path"].endswith("state.db")]
-        self.assertEqual([(f["group"], f["action"]) for f in found], [("memory", "chat-db")])
+        found = [f for f in rep["findings"] if f["path"].endswith(("state.db", "state.db-wal"))]
+        files = sorted(os.listdir(os.path.join(self.home, ".hermes")))
+        self.assertEqual([(f["group"], f["action"]) for f in found], [("memory", "chat-db")],
+                         "sqlite %s, files %s" % (sqlite3.sqlite_version, files))
         self.assert_no_full_key(self.audit(), self.audit("--details"), json.dumps(rep))
+
+    def test_key_in_recent_chats_of_a_running_agent(self):
+        # A running Hermes holds state.db open in WAL mode: new messages sit in
+        # state.db-wal until SQLite moves them into state.db.
+        import sqlite3
+        os.makedirs(os.path.join(self.home, ".hermes"))
+        path = os.path.join(self.home, ".hermes", "state.db")
+        db = sqlite3.connect(path)
+        self.addCleanup(db.close)
+        db.execute("pragma journal_mode=wal")
+        db.execute("pragma wal_autocheckpoint=0")
+        db.execute("create table messages (content text)")
+        db.commit()
+        db.execute("insert into messages values (?)", ("my token is %s" % self.key("ghp_", 36),))
+        db.commit()
+        with open(path, "rb") as fh:
+            self.assertNotIn(self.planted[-1].encode(), fh.read(), "test setup: key should only be in the WAL")
+        found = [f for f in self.audit_json()["findings"] if f["path"].endswith("state.db-wal")]
+        self.assertEqual([(f["group"], f["action"]) for f in found], [("memory", "chat-db")])
 
     def test_key_in_powershell_profile(self):
         self.write(".hermes/memories/MEMORY.md", "notes\n")

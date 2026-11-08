@@ -8,6 +8,7 @@
 - After a key is replaced, the agent asks where the new key should go: back in its settings, or in Swytchcode.
 - Moving to Swytchcode now checks the connection works before removing the old key, so nothing breaks if connecting fails.
 - Setting names like `refresh_token_from_store` are no longer mistaken for keys.
+- Recent chats of a running Hermes are checked too: keys in `state.db-wal`, where new messages wait before SQLite moves them into `state.db`, were missed.
 - The skill tells the agent never to search for keys on its own, and its description starts with the words people use.
 - README: which model to use, and preloading the skill in Hermes.
 - More tests: chat database, PowerShell profile, Markdown report, group access, after moving to Swytchcode, matching version numbers.
