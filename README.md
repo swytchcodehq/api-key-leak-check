@@ -118,11 +118,12 @@ Both pick up the skill on the next message. No restart needed.
 
 Use a capable model, like the one you'd use for everyday work. In our tests, GPT-5 class models loaded the skill, ran the check and showed the result exactly as written.
 
-Small or free models may ignore the skill and try to search for keys on their own. One did in our tests, and printed a real token into the chat. To make sure the skill is used:
+Small or free models may ignore the skill and try to search for keys on their own. One did in our tests, and printed a real token into the chat. Loading the skill or asking for it by name makes that less likely, but no skill can force a model to follow it:
 
 - Hermes: start the chat with the skill loaded: `hermes chat -s api-key-leak-check`
 - Any agent: ask for it by name: *"Use the api-key-leak-check skill. Am I leaking any keys?"*
-- Or run the check yourself (below). It works the same without an agent.
+
+The safest way, with any model, is to run the check yourself (below). It works the same without an agent, and no key can end up in a chat.
 
 ## Run it without an agent
 

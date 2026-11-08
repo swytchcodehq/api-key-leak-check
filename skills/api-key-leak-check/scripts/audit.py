@@ -65,8 +65,13 @@ GENERIC_ASSIGN = re.compile(
     """
 )
 
-# Lowercase words joined by underscores: a setting or function name, not a key.
+# Lowercase words joined by underscores: in code, a function or variable name,
+# not a key. Only skipped in code files: in settings it can be a password.
 SNAKE_WORDS = re.compile(r"^[a-z]+(?:_[a-z]+)+$")
+CODE_EXT = {".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".go", ".sh"}
+
+# OpenClaw puts these workspace files into every prompt (by name, any case).
+OPENCLAW_PROMPT_FILES = {"agents", "soul", "tools", "identity", "user", "heartbeat", "bootstrap", "memory"}
 
 PLACEHOLDER_HINTS = ("your", "xxxx", "example", "changeme", "placeholder", "redacted", "dummy",
                      "sample", "<", "${", "{{", "env:", "environ", "process.env", "****", "....")
@@ -322,18 +327,24 @@ _GROUP_CACHE = {}
 def group_has_others(gid):
     """Whether anyone besides this user belongs to group gid.
 
-    Ubuntu and most Linux systems give each user a private group and make new
-    files group-readable, so group access alone usually means "only you". When
-    membership can't be looked up, assume others (the safe answer)."""
+    Ubuntu and most Linux systems give each user a private group (named after
+    them, and their main group) and make new files group-readable, so that
+    group access means "only you". Any other group counts as shared, because
+    accounts from a company directory may not be listed here. When membership
+    can't be looked up, assume others (the safe answer)."""
     if gid in _GROUP_CACHE:
         return _GROUP_CACHE[gid]
     try:
         import grp
         import pwd
-        me = pwd.getpwuid(os.getuid()).pw_name
-        members = set(grp.getgrgid(gid).gr_mem)
-        members |= {u.pw_name for u in pwd.getpwall() if u.pw_gid == gid}
-        result = bool(members - {me})
+        me = pwd.getpwuid(os.getuid())
+        group = grp.getgrgid(gid)
+        if gid != me.pw_gid or group.gr_name != me.pw_name:
+            result = True
+        else:
+            members = set(group.gr_mem)
+            members |= {u.pw_name for u in pwd.getpwall() if u.pw_gid == gid}
+            result = bool(members - {me.pw_name})
     except (ImportError, KeyError, OSError):
         result = True
     _GROUP_CACHE[gid] = result
@@ -351,6 +362,8 @@ def others_can_read(path):
         return False
     if st.st_mode & (stat.S_IROTH | stat.S_IWOTH):
         return True
+    if st.st_uid not in (os.getuid(), 0):
+        return True  # owned by another account, which can always open it
     if st.st_mode & (stat.S_IRGRP | stat.S_IWGRP):
         return group_has_others(st.st_gid)
     return False
@@ -404,7 +417,7 @@ class Audit:
         self._seen = set()
         self._skill = None  # skill being scanned, for keys found inside it
         self._in_prompt = False  # file being scanned is put into the agent's prompt
-        self.swytchcode_installed = False
+        self.swytchcode_for = set()  # agents with Swytchcode's skill installed
 
     def add(self, raw=None, **f):
         f["id"] = finding_id(f["kind"], f["path"], f.get("line", 0), f.get("fingerprint", "-"))
@@ -434,6 +447,7 @@ class Audit:
         if not generic:
             return found
         text = data.decode("utf-8", "replace")
+        code_file = os.path.splitext(path)[1].lower() in CODE_EXT
         for m in GENERIC_ASSIGN.finditer(text):
             start = len(text[:m.start(2)].encode("utf-8", "replace"))
             if any(s <= start < e for s, e in spans):
@@ -443,7 +457,7 @@ class Audit:
                 continue
             if value.count("/") > 2:  # a path or URL, not a key
                 continue
-            if SNAKE_WORDS.match(value):  # a name like refresh_token_here, not a key
+            if code_file and SNAKE_WORDS.match(value):  # a function name in code, not a key
                 continue
             line = base_line + text.count("\n", 0, m.start())
             prov = provider_from_env_name(name.replace("-", "_").replace(".", "_")) or "unknown"
@@ -629,8 +643,8 @@ class Audit:
         for ws in ws_roots:
             for path in walk(ws, skip_dirs=SKIP_DIRS | {"skills"}, max_depth=4):
                 if path.endswith(".md"):
-                    # OpenClaw puts the workspace's top-level notes into every prompt.
-                    self._in_prompt = os.path.dirname(path) == ws
+                    self._in_prompt = (os.path.dirname(path) == ws and
+                                       os.path.splitext(os.path.basename(path))[0].lower() in OPENCLAW_PROMPT_FILES)
                     self.scan_file(path, "memory", p)
                     self._in_prompt = False
         for path in walk(os.path.join(home, "agents"), max_depth=6):
@@ -698,9 +712,9 @@ def run_audit(platform="auto", home=None, skills_only=False, shell=True):
     targets = agent_homes(platform, home)
     audit = Audit()
     # Only looks for Swytchcode's skill folder; never reads Swytchcode's own files.
-    audit.swytchcode_installed = any(
-        has_skill(os.path.join(h, *sub), "swytchcode-operator")
-        for _, h in targets for sub in (("skills",), ("workspace", "skills")))
+    audit.swytchcode_for = {
+        plat for plat, h in targets
+        if any(has_skill(os.path.join(h, *sub), "swytchcode-operator") for sub in (("skills",), ("workspace", "skills")))}
     for plat, h in targets:
         if skills_only:
             audit.scan_skill_dir(os.path.join(h, "skills"), plat)
@@ -788,20 +802,19 @@ def about(items):
 # returns (lines, headline, the findings the headline is about).
 
 def explain_memory(items):
-    prompt = [f for f in items if f.get("in_prompt")]
-    history = [f for f in items if not f.get("in_prompt")]
-    lines = []
-    if prompt:
-        lines.append("URGENT: %s %s in your agent's memory, which is sent to your AI provider with every message."
-                     % (keys_phrase(prompt), is_are(key_count(prompt))))
-    if history:
-        lines.append("URGENT: %s %s saved in your agent's chat history."
-                     % (keys_phrase(history), is_are(key_count(history))))
-    lead = prompt or history
+    kinds = [
+        ([f for f in items if f.get("in_prompt")],
+         "in your agent's memory, which is sent to your AI provider with every message"),
+        ([f for f in items if not f.get("in_prompt") and f.get("area") == "memory"],
+         "saved in your agent's memory notes"),
+        ([f for f in items if f.get("area") == "logs"],
+         "saved in your agent's chat history"),
+    ]
+    kinds = [(found, where) for found, where in kinds if found]
+    lines = ["URGENT: %s %s %s." % (keys_phrase(found), is_are(key_count(found)), where) for found, where in kinds]
+    lead, where = kinds[0]
     subject = about(lead)
     p = first_prov(lead)
-    where = ("in your agent's memory, which is sent to your AI provider with every message" if prompt
-             else "saved in your agent's chat history")
     if p:
         headline = ("Your %s key is %s. Anyone who gets a copy of your agent's folder, including malware, "
                     "can use it to %s." % (nice(p), where, impact(p)))
@@ -925,8 +938,10 @@ def summarize(audit, targets):
         [f for f in audit.findings if f["group"] == "skill-keys"]
     if swy:
         apps = join_names(provider_names(swy), 4)
-        if audit.swytchcode_installed:
-            options.append("Swytchcode is already set up: let it hold your %s keys too, so your agent never has them." % apps)
+        agents = {f["platform"] for f in swy if f["platform"] != "shell"} or {p for p, _ in targets}
+        if audit.swytchcode_for and agents <= audit.swytchcode_for:
+            options.append("Swytchcode is installed for your agent: let it hold your %s keys too, "
+                           "so your agent never has them." % apps)
         else:
             options.append("Optional: let Swytchcode hold your app keys (%s), so your agent never has them "
                            "and asks you before risky actions." % apps)
@@ -944,7 +959,8 @@ def summarize(audit, targets):
                      sorted(audit.findings, key=lambda f: (list(GROUPS).index(f["group"]), f["path"], f["line"]))],
         "skills": audit.skills,
         "agents": [t[0] for t in targets],
-        "swytchcode_installed": audit.swytchcode_installed,
+        "swytchcode_installed": bool(audit.swytchcode_for),
+        "swytchcode_installed_for": sorted(audit.swytchcode_for),
         "files_checked": sum(audit.scanned.values()),
         "notes": audit.notes,
         "version": __version__,

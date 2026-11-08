@@ -38,16 +38,21 @@ Call `swytchcode_connect` with the app. Send the user the result's `action.messa
 - For apps like Gmail or Slack, that's a sign-in page in their browser.
 - For apps that use a key, the user pastes the key into **their terminal** when asked. Never into this chat.
 
-Ask them to make a **new** key on the app's website and connect that one, because the old one was exposed. Tell them to keep the old key switched on for now: it's turned off in step 6, once Swytchcode's copy is proven to work. That way nothing stops working if a step goes wrong.
+For apps that use a key, ask them to make a **new** key on the app's website and connect that one, because the old one was exposed. Tell them to keep the old key switched on for now: it's turned off in step 6, once Swytchcode's copy is proven to work. That way nothing stops working if a step goes wrong.
+
+For apps that sign in through the browser (Gmail, Slack and so on), there's no new key to make: they sign in on the page Swytchcode gives them. The old access is turned off in step 6, in the app's list of connected apps.
 
 ## 4. Remove the old copies
 
 **This step is required, and it comes before the check in step 5.** An old copy left in the agent's files or the terminal startup files is still exposed. Worse, it's used instead of the one Swytchcode holds, so a check made while it's still there could pass with the old key and prove nothing.
 
-1. Run `audit.py --json` and find every finding for this app's key (`provider` is the app).
+Tell the user first: "Skills that use this key stop working from now until we've moved them over in step 7." If they need one of those skills right now, finish what they're doing first.
+
+1. Run `audit.py --json` and find every finding for this app's key (`provider` is the app). If some findings say `unknown`, run `--details` and ask the user whether any of them is this app's key, by the setting's name. Include those too.
 2. Run `fix.py --dry-run <ids>`, tell the user what it will do, and after their yes, run `fix.py <ids>`.
-3. If an item can't be fixed by `fix.py`, tell the user what to do in plain words. For the agent's own settings, give them the exact command to copy.
-4. The agent has to start again so the old key is gone from it too. Hermes: "Close Hermes and start it again with `hermes --continue`." OpenClaw: "Paste `openclaw gateway restart` in the terminal." If a key was in a terminal startup file, they also open a new terminal before starting the agent.
+3. If an item can't be fixed by `fix.py`, tell the user what to do in plain words. For the agent's own settings, give them the exact command to copy, and wait until they say it's done.
+4. Run `audit.py --json` again. If a finding for this key is still there, stop: tell the user which copy is left and don't go on to step 5 until it's gone.
+5. The agent has to start again so the old key is gone from it too. Hermes: "Close Hermes and start it again with `hermes --continue`." OpenClaw: "Paste `openclaw gateway restart` in the terminal." If a key was in a terminal startup file, they also open a new terminal before starting the agent.
 
 ## 5. Check it works
 
@@ -57,7 +62,7 @@ If it fails, tell them what went wrong and connect the new key again with `swytc
 
 ## 6. Turn off the old key
 
-Only after step 5 worked. Ask them to delete the old key on the app's website: "Go to [link] and delete the old key. The new one in Swytchcode keeps working." The links are in `audit.py --details`.
+Only after step 5 worked. Ask them to delete the old key on the app's website: "Go to [link] and delete the old key. The new one in Swytchcode keeps working." The links are in `audit.py --details`. For apps they signed in to through the browser, they remove the old access in the app's list of connected apps instead.
 
 If they connected the old key in step 3 instead of a new one, ask them to make a new key now, connect it with `swytchcode_connect`, check it again (step 5), and then delete the old one.
 

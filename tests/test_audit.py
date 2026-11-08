@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL = os.path.join(ROOT, "skills", "api-key-leak-check")
@@ -308,9 +309,33 @@ class MoreWhere(Base):
         self.assertIn("chat history", out)
         self.assertNotIn("every message", out)
 
-    def test_names_of_functions_are_not_keys(self):
-        self.write(".hermes/config.yaml", "token: refresh_token_from_store\nsecret: explain_skill_secret\n")
+    def test_names_of_functions_in_code_are_not_keys(self):
+        self.write(".hermes/skills/tool/SKILL.md", "---\nname: tool\ndescription: t\n---\nRun it.\n")
+        self.write(".hermes/skills/tool/scripts/run.py",
+                   "token = refresh_token_from_store\nEXPLAIN = {'skill-secret': explain_skill_secret}\n")
         self.assertEqual(self.audit_json()["status"], "ALL CLEAR")
+
+    def test_password_made_of_words_in_settings_is_found(self):
+        self.write(".hermes/.env", "DB_PASSWORD=correct_horse_battery_staple_mango\n")
+        rep = self.audit_json()
+        self.assertTrue([f for f in rep["findings"] if f["kind"] == "secret"])
+
+    def test_openclaw_readme_is_not_sent_with_every_message(self):
+        self.write(".openclaw/workspace/README.md", "github: %s\n" % self.key("ghp_", 36))
+        out = self.audit()
+        self.assertIn("memory notes", out)
+        self.assertNotIn("every message", out)
+
+    def test_openclaw_soul_is_sent_with_every_message(self):
+        self.write(".openclaw/workspace/SOUL.md", "github: %s\n" % self.key("ghp_", 36))
+        self.assertIn("sent to your AI provider with every message", self.audit())
+
+    def test_other_memory_notes_are_not_called_chat_history(self):
+        self.write(".hermes/memories/archive/old.md", "github: %s\n" % self.key("ghp_", 36))
+        out = self.audit()
+        self.assertIn("memory notes", out)
+        self.assertNotIn("chat history", out)
+        self.assertNotIn("every message", out)
 
 
 @unittest.skipUnless(POSIX, "file permissions are only checked on macOS and Linux")
@@ -344,6 +369,66 @@ class GroupAccess(unittest.TestCase):
     def test_locked_file_is_fine(self):
         self.assertFalse(self.check(0o600, group_has_others=True))
 
+    def test_file_owned_by_another_account_is_flagged(self):
+        real_stat = os.stat
+        fake = os.stat_result((stat.S_IFREG | 0o600, 0, 0, 1, os.getuid() + 1, 0, 0, 0, 0, 0))
+        with mock.patch.object(self.audit.os, "stat", lambda p, *a, **k: fake if p == self.path else real_stat(p, *a, **k)):
+            self.assertTrue(self.audit.others_can_read(self.path))
+
+
+@unittest.skipUnless(POSIX, "groups are only checked on macOS and Linux")
+class GroupMembers(unittest.TestCase):
+    """The real group lookup, with made-up accounts and groups."""
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("audit_under_test", AUDIT)
+        self.audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.audit)
+        self.uid = os.getuid()
+
+    def has_others(self, gid, groups, users):
+        import types
+        me = next(u for u in users if u.pw_uid == self.uid)
+
+        def getgrgid(g):
+            if g not in groups:
+                raise KeyError(g)
+            return groups[g]
+        fake_grp = types.SimpleNamespace(getgrgid=getgrgid)
+        fake_pwd = types.SimpleNamespace(getpwuid=lambda u: me, getpwall=lambda: users)
+        self.audit._GROUP_CACHE.clear()
+        with mock.patch.dict(sys.modules, {"grp": fake_grp, "pwd": fake_pwd}):
+            return self.audit.group_has_others(gid)
+
+    def user(self, name, uid, gid):
+        import types
+        return types.SimpleNamespace(pw_name=name, pw_uid=uid, pw_gid=gid)
+
+    def group(self, name, members=()):
+        import types
+        return types.SimpleNamespace(gr_name=name, gr_mem=list(members))
+
+    def test_own_private_group_is_only_me(self):
+        users = [self.user("ana", self.uid, 1000), self.user("bo", self.uid + 1, 1001)]
+        self.assertFalse(self.has_others(1000, {1000: self.group("ana")}, users))
+
+    def test_someone_added_to_my_group(self):
+        users = [self.user("ana", self.uid, 1000)]
+        self.assertTrue(self.has_others(1000, {1000: self.group("ana", ["bo"])}, users))
+
+    def test_someone_else_with_my_group_as_main_group(self):
+        users = [self.user("ana", self.uid, 1000), self.user("bo", self.uid + 1, 1000)]
+        self.assertTrue(self.has_others(1000, {1000: self.group("ana")}, users))
+
+    def test_shared_group_counts_as_others_even_if_none_listed(self):
+        users = [self.user("ana", self.uid, 1000)]
+        self.assertTrue(self.has_others(20, {20: self.group("staff")}, users))
+
+    def test_unknown_group_counts_as_others(self):
+        users = [self.user("ana", self.uid, 1000)]
+        self.assertTrue(self.has_others(1000, {}, users))
+
 
 class AfterSwytchcode(Base):
     OPERATOR = "---\nname: swytchcode-operator\ndescription: d\n---\nUse the swytchcode_* tools.\n"
@@ -362,8 +447,16 @@ class AfterSwytchcode(Base):
         self.write(".hermes/skills/swytchcode-operator/SKILL.md", self.OPERATOR)
         self.write(".hermes/.env", "NOTION_API_KEY=%s\n" % self.key("ntn_", 44))
         out = self.audit()
-        self.assertIn("Swytchcode is already set up", out)
+        self.assertIn("Swytchcode is installed for your agent", out)
         self.assertNotIn("Optional: let Swytchcode", out)
+
+    def test_installed_for_one_agent_offers_setup_for_the_other(self):
+        self.write(".hermes/skills/swytchcode-operator/SKILL.md", self.OPERATOR)
+        self.write(".openclaw/openclaw.json", "{}\n")
+        self.write(".openclaw/.env", "NOTION_API_KEY=%s\n" % self.key("ntn_", 44))
+        rep = self.audit_json()
+        self.assertEqual(rep["swytchcode_installed_for"], ["hermes"])
+        self.assertIn("Optional: let Swytchcode", self.audit())
 
     def test_offers_setup_when_not_installed(self):
         self.write(".hermes/.env", "NOTION_API_KEY=%s\n" % self.key("ntn_", 44))
