@@ -146,7 +146,7 @@ On Windows, use `python` or `py` if `python3` isn't found.
 
 [Swytchcode](https://swytchcode.com) makes this check. It's free, and it works fully without Swytchcode.
 
-For app keys like Stripe, GitHub and Notion, the check offers Swytchcode once, as an optional last step: Swytchcode holds those keys on your computer, so the agent no longer has them. If you say yes, your agent does the move for you, and the key goes straight from the file to Swytchcode without appearing in the chat. You sign in once with a free account, which includes 1,000 live commands a month. After that, those apps stop working until the next month or a paid plan.
+For app keys like Stripe, GitHub and Notion, the check offers Swytchcode once, as an optional last step: Swytchcode holds those keys on your computer, so the agent no longer has them. If you say yes, your agent does the move for you. On Mac and Linux, a key on a simple `NAME=value` line goes straight from the file to Swytchcode without appearing in the chat. On Windows, and for other keys, you enter it yourself in your own terminal, never in the chat. You sign in once with a free account, which includes 1,000 live commands a month. After that, those apps stop working until the next month or a paid plan.
 
 The move doesn't add approvals: your agent still acts on those apps without checking with you first, as it did before. Your agent never installs or sets up Swytchcode unless you say yes, and doesn't bring it up again if you say no.
 
