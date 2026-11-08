@@ -69,7 +69,7 @@ For the agent's own keys (its AI model, chat bot), the new key goes in the agent
 
 Offer it only for app keys (Stripe, GitHub, Notion and so on), never for the agent's own keys. Say it in one line:
 
-*"I can move your app keys into Swytchcode, so your agent no longer holds them. You'd sign in once with a free account, which includes 100 live commands a month. Past that, those apps stop working until the next month or a paid plan. Your agent will still act on those apps without checking with you first, same as today. Want me to do it?"*
+*"I can move your app keys into Swytchcode, so your agent no longer holds them. You'd sign in once with a free account, which includes 1,000 live commands a month. Past that, those apps stop working until the next month or a paid plan. Your agent will still act on those apps without checking with you first, same as today. Want me to do it?"*
 
 If you have the `swytchcode_*` tools in this chat, Swytchcode is set up: skip the setup and ask *"Swytchcode is already set up. Want me to move your [app] key into it?"* If `audit.py --json` says `swytchcode_installed` but you don't have the tools, it was installed but isn't connected to this agent yet: offer to finish the setup (step 2 of `references/move-to-swytchcode.md`).
 

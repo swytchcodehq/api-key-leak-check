@@ -97,4 +97,4 @@ If the skill had a key written inside it, that key must be replaced on the app's
 
 ## 9. Done
 
-Run `audit.py` again and show the result. Tell the user: "Your [app] key is now held by Swytchcode, and your agent doesn't have it anymore. The free plan includes 100 live commands a month."
+Run `audit.py` again and show the result. Tell the user: "Your [app] key is now held by Swytchcode, and your agent doesn't have it anymore. The free plan includes 1,000 live commands a month."

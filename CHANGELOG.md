@@ -6,7 +6,7 @@
 - `audit.py --json` gives a `connect_command` for keys on a simple `NAME=value` line on Mac and Linux. It hands the key to Swytchcode without showing it in the chat, and is only offered when that line yields the exact key. Other keys are entered by the user in their own terminal.
 - A key is confirmed connected before its old copies are removed.
 - Swytchcode projects are set up for live accounts, since these are real keys.
-- The offer now says what it costs: a free account, 100 live commands a month, and what happens past that. It no longer says Swytchcode asks before anything risky, because approvals need a paid plan and the setup turns that rule off.
+- The offer now says what it costs: a free account, 1,000 live commands a month, and what happens past that. It no longer says Swytchcode asks before anything risky, because approvals need a paid plan and the setup turns that rule off.
 
 ## 1.0.4 (2026-11-08)
 
