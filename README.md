@@ -9,21 +9,22 @@ Ask your agent: *"Is my setup leaking any keys?"*
 ```
 SECURITY CHECK: ACTION NEEDED
 
-Your Stripe key is saved in your agent's memory or chat history. Anyone who gets
-a copy of your agent's folder, including malware, can use it to charge cards,
-issue refunds and see your customers.
+Your Stripe key is in your agent's memory, which is sent to your AI provider
+with every message. Anyone who gets a copy of your agent's folder, including
+malware, can use it to charge cards, issue refunds and see your customers.
 
 What we found:
-1. URGENT: Your Stripe key is saved in your agent's memory or chat history.
-2. 2 files holding your keys can be opened by other accounts on this computer.
-3. 1 skill uses your Notion key directly: notion.
+1. URGENT: Your Stripe key is in your agent's memory, which is sent to your AI
+   provider with every message.
+2. 1 file holding your keys can be opened by other accounts on this computer.
 
 What you can do:
-1. Clean up: remove the stray copies of your keys and lock your files.
-   Your agent can do this for you, one step at a time.
+1. Clean up: remove the stray copies of your keys and lock your files. Your
+   agent can do this for you, one step at a time.
 2. Replace the exposed keys: make new ones at Stripe and turn off the old ones.
-3. Optional: let Swytchcode hold your app keys (Stripe and Notion), so your
-   agent never has them and asks you before risky actions.
+   This takes a few minutes each, on their websites.
+3. Optional: let Swytchcode hold your app keys (Stripe), so your agent never
+   has them and asks you before risky actions.
 
 Say "show me the details" to see where each one is.
 
@@ -112,6 +113,17 @@ git clone https://github.com/swytchcodehq/api-key-leak-check ~/api-key-leak-chec
   ```
 
 Both pick up the skill on the next message. No restart needed.
+
+## Which model to use
+
+Use a capable model, like the one you'd use for everyday work. In our tests, GPT-5 class models loaded the skill, ran the check and showed the result exactly as written.
+
+Small or free models may ignore the skill and try to search for keys on their own. One did in our tests, and printed a real token into the chat. Loading the skill or asking for it by name makes that less likely, but no skill can force a model to follow it:
+
+- Hermes: start the chat with the skill loaded: `hermes chat -s api-key-leak-check`
+- Any agent: ask for it by name: *"Use the api-key-leak-check skill. Am I leaking any keys?"*
+
+The safest way, with any model, is to run the check yourself (below). It works the same without an agent, and no key can end up in a chat.
 
 ## Run it without an agent
 

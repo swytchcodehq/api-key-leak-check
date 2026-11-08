@@ -25,12 +25,12 @@ import sys
 from collections import Counter, OrderedDict
 from datetime import datetime
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 MAX_TEXT_BYTES = 5 * 1024 * 1024      # read text files up to this size
 MAX_BINARY_BYTES = 400 * 1024 * 1024  # byte-scan databases up to this size
 CHUNK = 8 * 1024 * 1024
-MAX_FILES_PER_AREA = 20000
+MAX_FILES_PER_WALK = 20000  # stop a single folder walk after this many files
 
 # --------------------------------------------------------------------------
 # What a key looks like. Order matters: specific prefixes first, and a span
@@ -64,6 +64,14 @@ GENERIC_ASSIGN = re.compile(
     ["']?([A-Za-z0-9_\-./+=:]{20,})["']?
     """
 )
+
+# Lowercase words joined by underscores: in code, a function or variable name,
+# not a key. Only skipped in code files: in settings it can be a password.
+SNAKE_WORDS = re.compile(r"^[a-z]+(?:_[a-z]+)+$")
+CODE_EXT = {".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".go", ".sh"}
+
+# OpenClaw puts these workspace files into every prompt (by name, any case).
+OPENCLAW_PROMPT_FILES = {"agents", "soul", "tools", "identity", "user", "heartbeat", "bootstrap", "memory"}
 
 PLACEHOLDER_HINTS = ("your", "xxxx", "example", "changeme", "placeholder", "redacted", "dummy",
                      "sample", "<", "${", "{{", "env:", "environ", "process.env", "****", "....")
@@ -172,7 +180,9 @@ SHELL_PROFILES = [".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", 
 TEXT_EXT = {".md", ".txt", ".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".json", ".json5",
             ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".log", ".ps1", ".rb",
             ".go", ".html", ".xml", ".csv", ".fish", ""}
-BINARY_SCAN_EXT = {".db", ".sqlite", ".sqlite3"}
+# Databases, and their write-ahead logs: a running Hermes keeps recent chats in
+# state.db-wal until SQLite moves them into state.db.
+BINARY_SCAN_EXT = {".db", ".sqlite", ".sqlite3", ".db-wal", ".sqlite-wal", ".sqlite3-wal"}
 SKIP_DIRS = {"node_modules", ".git", "__pycache__", ".venv", "venv", "image_cache", "audio_cache",
              "hermes-agent", "node", "bin", "cache", ".cache", "dist", "build", "site-packages"}
 
@@ -184,7 +194,7 @@ LINE_FILES_EXT = {".md", ".txt", ".env", ".sh", ".bash", ".zsh", ".fish", ".ps1"
 # Groups: how findings are explained to a person. Order = how bad.
 # --------------------------------------------------------------------------
 GROUPS = OrderedDict([
-    ("memory", {"level": "urgent", "title": "Keys saved in your agent's memory or chat history"}),
+    ("memory", {"level": "urgent", "title": "Keys in your agent's memory or chat history"}),
     ("skill-secret", {"level": "urgent", "title": "Skills with a key written inside them"}),
     ("skill-leak", {"level": "high", "title": "Skills that can show your keys in the chat"}),
     ("open-files", {"level": "high", "title": "Files with your keys that other accounts on this computer can open"}),
@@ -194,7 +204,6 @@ GROUPS = OrderedDict([
     ("skill-keys", {"level": "medium", "title": "Skills that handle your app keys directly"}),
     ("agent-logins", {"level": "info", "title": "Your agent's own login keys (normal)"}),
 ])
-LEVELS = ["urgent", "high", "medium", "info"]
 
 # This skill's own folder (scripts/ is inside it).
 SELF_DIR = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -294,7 +303,7 @@ def walk(root, skip_dirs=SKIP_DIRS, max_depth=8):
             if os.path.islink(p):
                 continue
             count += 1
-            if count > MAX_FILES_PER_AREA:
+            if count > MAX_FILES_PER_WALK:
                 return
             yield p
 
@@ -312,16 +321,52 @@ def read_text(path):
     return data
 
 
+_GROUP_CACHE = {}
+
+
+def group_has_others(gid):
+    """Whether anyone besides this user belongs to group gid.
+
+    Ubuntu and most Linux systems give each user a private group (named after
+    them, and their main group) and make new files group-readable, so that
+    group access means "only you". Any other group counts as shared, because
+    accounts from a company directory may not be listed here. When membership
+    can't be looked up, assume others (the safe answer)."""
+    if gid in _GROUP_CACHE:
+        return _GROUP_CACHE[gid]
+    try:
+        import grp
+        import pwd
+        me = pwd.getpwuid(os.getuid())
+        group = grp.getgrgid(gid)
+        if gid != me.pw_gid or group.gr_name != me.pw_name:
+            result = True
+        else:
+            members = set(group.gr_mem)
+            members |= {u.pw_name for u in pwd.getpwall() if u.pw_gid == gid}
+            result = bool(members - {me.pw_name})
+    except (ImportError, KeyError, OSError):
+        result = True
+    _GROUP_CACHE[gid] = result
+    return result
+
+
 def others_can_read(path):
     # Windows reports every file as readable by all in st_mode; its access
     # control is ACLs, which this can't read. Skip rather than flag every file.
     if os.name == "nt":
         return False
     try:
-        mode = os.stat(path).st_mode
+        st = os.stat(path)
     except OSError:
         return False
-    return bool(mode & (stat.S_IROTH | stat.S_IRGRP | stat.S_IWGRP | stat.S_IWOTH))
+    if st.st_mode & (stat.S_IROTH | stat.S_IWOTH):
+        return True
+    if st.st_uid not in (os.getuid(), 0):
+        return True  # owned by another account, which can always open it
+    if st.st_mode & (stat.S_IRGRP | stat.S_IWGRP):
+        return group_has_others(st.st_gid)
+    return False
 
 
 def is_backup_path(path):
@@ -371,6 +416,8 @@ class Audit:
         self.raw = {}  # finding id -> secret; used only by fix.py, never printed
         self._seen = set()
         self._skill = None  # skill being scanned, for keys found inside it
+        self._in_prompt = False  # file being scanned is put into the agent's prompt
+        self.swytchcode_for = set()  # agents with Swytchcode's skill installed
 
     def add(self, raw=None, **f):
         f["id"] = finding_id(f["kind"], f["path"], f.get("line", 0), f.get("fingerprint", "-"))
@@ -400,6 +447,7 @@ class Audit:
         if not generic:
             return found
         text = data.decode("utf-8", "replace")
+        code_file = os.path.splitext(path)[1].lower() in CODE_EXT
         for m in GENERIC_ASSIGN.finditer(text):
             start = len(text[:m.start(2)].encode("utf-8", "replace"))
             if any(s <= start < e for s, e in spans):
@@ -408,6 +456,8 @@ class Audit:
             if looks_placeholder(value) or entropy(value) < 3.5 or value.lower() in ("true", "false", "null"):
                 continue
             if value.count("/") > 2:  # a path or URL, not a key
+                continue
+            if code_file and SNAKE_WORDS.match(value):  # a function name in code, not a key
                 continue
             line = base_line + text.count("\n", 0, m.start())
             prov = provider_from_env_name(name.replace("-", "_").replace(".", "_")) or "unknown"
@@ -460,6 +510,7 @@ class Audit:
         self.add(raw=raw, kind="secret", group=group, area=area, platform=platform, provider=prov,
                  key=describe_key(prov, raw), fingerprint=fingerprint(raw), test_key=test,
                  own_key=own, skill=self._skill if area == "skills" else None,
+                 in_prompt=self._in_prompt and area == "memory",
                  path=tilde(path), abspath=path, line=line, action=action,
                  rotate=exposed and prov not in ("gateway", "unknown"))
         return 1
@@ -592,7 +643,10 @@ class Audit:
         for ws in ws_roots:
             for path in walk(ws, skip_dirs=SKIP_DIRS | {"skills"}, max_depth=4):
                 if path.endswith(".md"):
+                    self._in_prompt = (os.path.dirname(path) == ws and
+                                       os.path.splitext(os.path.basename(path))[0].lower() in OPENCLAW_PROMPT_FILES)
                     self.scan_file(path, "memory", p)
+                    self._in_prompt = False
         for path in walk(os.path.join(home, "agents"), max_depth=6):
             area = "logs" if "sessions" in path.split(os.sep) else "config"
             self.scan_file(path, area, p, generic=(area == "config"))
@@ -612,9 +666,16 @@ class Audit:
     def run_hermes(self, home):
         p = "hermes"
         self.scan_skill_dir(os.path.join(home, "skills"), p)
+        # Hermes puts these into every prompt.
+        prompt_files = {os.path.join(home, "SOUL.md"), os.path.join(home, "memories", "MEMORY.md"),
+                        os.path.join(home, "memories", "USER.md")}
+        self._in_prompt = True
         self.scan_file(os.path.join(home, "SOUL.md"), "memory", p)
+        self._in_prompt = False
         for path in walk(os.path.join(home, "memories"), max_depth=4):
+            self._in_prompt = path in prompt_files
             self.scan_file(path, "memory", p)
+            self._in_prompt = False
         for sub in ("logs", "sessions", "cron"):
             for path in walk(os.path.join(home, sub), max_depth=5):
                 self.scan_file(path, "logs", p, generic=False)
@@ -640,9 +701,20 @@ class Audit:
                 self.scan_file(path, "shell", "shell")
 
 
+def has_skill(skills_root, name):
+    """Whether a skill folder is installed, directly or one category deep (Hermes)."""
+    if os.path.isfile(os.path.join(skills_root, name, "SKILL.md")):
+        return True
+    return any(os.path.isfile(os.path.join(skills_root, d, name, "SKILL.md")) for d in safe_listdir(skills_root))
+
+
 def run_audit(platform="auto", home=None, skills_only=False, shell=True):
     targets = agent_homes(platform, home)
     audit = Audit()
+    # Only looks for Swytchcode's skill folder; never reads Swytchcode's own files.
+    audit.swytchcode_for = {
+        plat for plat, h in targets
+        if any(has_skill(os.path.join(h, *sub), "swytchcode-operator") for sub in (("skills",), ("workspace", "skills")))}
     for plat, h in targets:
         if skills_only:
             audit.scan_skill_dir(os.path.join(h, "skills"), plat)
@@ -690,89 +762,189 @@ def name_agent(text, label):
     return text
 
 
+def provider_names(items):
+    return [nice(p) for f in items for p in f.get("provider", "").split(",") if p and p not in ("-", "unknown")]
+
+
+def first_prov(items):
+    """The provider a headline leads with: app keys before the agent's own, Stripe first."""
+    ps = [f.get("provider") for f in items if f.get("provider") not in (None, "-", "unknown")]
+    ps.sort(key=lambda p: (p in AGENT_OWN, p != "stripe"))
+    return ps[0] if ps else None
+
+
+def impact(p):
+    return PROVIDERS.get(p, (None, "use that account as you", None))[1]
+
+
+def is_are(n):
+    return "is" if n == 1 else "are"
+
+
+def key_count(items):
+    return len({f.get("fingerprint") for f in items if f["kind"] == "secret"})
+
+
+def keys_phrase(items):
+    """ "Your Stripe key" / "Your Stripe and GitHub keys" / "2 keys". """
+    n, p = key_count(items), join_names(provider_names(items))
+    return ("Your %s %s" % (p, plural(n, "key"))) if p else ("%d %s" % (n, plural(n, "key")))
+
+
+def about(items):
+    """The findings about the provider a headline leads with."""
+    p = first_prov(items)
+    return [f for f in items if f.get("provider") == p] if p else items
+
+
+# Each group explains itself here, in one place: the line(s) in "What we
+# found", and the headline used when it's the worst problem. Each function
+# returns (lines, headline, the findings the headline is about).
+
+def explain_memory(items):
+    kinds = [
+        ([f for f in items if f.get("in_prompt")],
+         "in your agent's memory, which is sent to your AI provider with every message"),
+        ([f for f in items if not f.get("in_prompt") and f.get("area") == "memory"],
+         "saved in your agent's memory notes"),
+        ([f for f in items if f.get("area") == "logs"],
+         "saved in your agent's chat history"),
+    ]
+    kinds = [(found, where) for found, where in kinds if found]
+    lines = ["URGENT: %s %s %s." % (keys_phrase(found), is_are(key_count(found)), where) for found, where in kinds]
+    lead, where = kinds[0]
+    subject = about(lead)
+    p = first_prov(lead)
+    if p:
+        headline = ("Your %s key is %s. Anyone who gets a copy of your agent's folder, including malware, "
+                    "can use it to %s." % (nice(p), where, impact(p)))
+    else:
+        headline = ("A key is %s. Anyone who gets a copy of your agent's folder, including malware, "
+                    "can use it." % where)
+    return lines, headline, subject
+
+
+def explain_skill_secret(items):
+    names = [f["skill"] for f in items]
+    p = first_prov(items)
+    line = "URGENT: A key is written inside %s: %s." % (
+        "a skill" if len(set(names)) == 1 else "some skills", join_names(names))
+    headline = ("A skill you installed has %s key written inside it. Anyone with a copy of that skill can use it%s."
+                % ("your %s" % nice(p) if p else "a", " to " + impact(p) if p else ""))
+    return [line], headline, about(items)
+
+
+def explain_skill_leak(items):
+    skills = [f["skill"] for f in items]
+    n = len(set(skills))
+    line = "%d %s can show your keys in the chat, where they get saved: %s." % (n, plural(n, "skill"), join_names(skills))
+    return [line], "Some of your skills can print your keys into the chat, where they get saved in your history.", items
+
+
+def explain_open_files(items):
+    n = len(items)
+    line = "%d %s holding your keys can be opened by other accounts on this computer." % (n, plural(n, "file"))
+    return [line], "Other accounts on this computer can open files that hold your keys.", items
+
+
+def explain_app_keys(items):
+    n, p = key_count(items), first_prov(items)
+    line = "Your %s %s saved as plain text in your agent's settings." % (
+        join_names(provider_names(items)) or "app", "key is" if n == 1 else "keys are")
+    headline = ("Your %s key is sitting in plain text in your agent's settings. Malware that copies your "
+                "agent's folder can use it to %s." % (nice(p), impact(p)))
+    return [line], headline, about(items)
+
+
+def explain_shell(items):
+    n = key_count(items)
+    line = "%d %s (%s) %s in your terminal startup files, so every program you run can read %s." % (
+        n, plural(n, "key"), join_names(provider_names(items)) or "unknown", is_are(n), "it" if n == 1 else "them")
+    headline = ("Your %s key is in your terminal startup files, so every program you run can read it."
+                % nice(first_prov(items)))
+    return [line], headline, about(items)
+
+
+def explain_backups(items):
+    n = len({f["path"] for f in items})
+    line = "%d old backup %s still %s copies of your keys." % (n, plural(n, "file"), "holds" if n == 1 else "hold")
+    return [line], "Old backups of your agent still hold copies of your keys.", items
+
+
+def explain_skill_keys(items):
+    n = len(items)
+    p = provider_names(items)
+    line = "%d %s your %s %s directly: %s." % (
+        n, "skill uses" if n == 1 else "skills use", join_names(p), plural(len(set(p)), "key"),
+        join_names([f["skill"] for f in items]))
+    headline = ("Your agent holds your app keys for %d %s. If the agent is tricked, or its folder is "
+                "copied, those keys go with it." % (n, plural(n, "skill")))
+    return [line], headline, items
+
+
+def explain_agent_logins(items):
+    return [], None, items  # normal: shown only in details
+
+
+EXPLAIN = {
+    "memory": explain_memory, "skill-secret": explain_skill_secret, "skill-leak": explain_skill_leak,
+    "open-files": explain_open_files, "app-keys": explain_app_keys, "shell": explain_shell,
+    "backups": explain_backups, "skill-keys": explain_skill_keys, "agent-logins": explain_agent_logins,
+}
+
+
 def summarize(audit, targets):
     by_group = OrderedDict((g, [f for f in audit.findings if f["group"] == g]) for g in GROUPS)
     by_group = OrderedDict((g, v) for g, v in by_group.items() if v)
 
-    def provs(items):
-        return [nice(p) for f in items for p in f.get("provider", "").split(",") if p and p not in ("-", "unknown")]
-
     # Only name the agent when there's more than one to tell apart.
     several_agents = len(targets) > 1
-    lines = []
+    lines, headline, subject = [], "No exposed keys found.", []
     for g, items in by_group.items():
-        before = len(lines)
-        n_keys = len({f.get("fingerprint") for f in items if f["kind"] == "secret"})
-        skills = [f.get("skill") for f in items]
-        p = join_names(provs(items))
-        if g == "memory":
-            lines.append("URGENT: %s saved in your agent's memory or chat history."
-                         % ("Your %s %s %s" % (p, plural(n_keys, "key"), "is" if n_keys == 1 else "are") if p else "%d %s %s" % (n_keys, plural(n_keys, "key"), "is" if n_keys == 1 else "are")))
-        elif g == "skill-secret":
-            names = [f["skill"] for f in items]
-            lines.append("URGENT: A key is written inside %s: %s."
-                         % ("a skill" if len(set(names)) == 1 else "some skills", join_names(names)))
-        elif g == "skill-leak":
-            names = join_names(skills)
-            lines.append("%d %s can show your keys in the chat, where they get saved: %s."
-                         % (len(set(skills)), plural(len(set(skills)), "skill"), names))
-        elif g == "open-files":
-            lines.append("%d %s holding your keys can be opened by other accounts on this computer."
-                         % (len(items), plural(len(items), "file")))
-        elif g == "app-keys":
-            lines.append("Your %s %s saved as plain text in your agent's settings."
-                         % (p or "app", "key is" if n_keys == 1 else "keys are"))
-        elif g == "shell":
-            lines.append("%d %s (%s) %s in your terminal startup files, so every program you run can read %s."
-                         % (n_keys, plural(n_keys, "key"), p or "unknown", "is" if n_keys == 1 else "are", "it" if n_keys == 1 else "them"))
-        elif g == "backups":
-            files = len({f["path"] for f in items})
-            lines.append("%d old backup %s still %s copies of your keys."
-                         % (files, plural(files, "file"), "holds" if files == 1 else "hold"))
-        elif g == "skill-keys":
-            lines.append("%d %s your %s %s directly: %s."
-                         % (len(items), "skill uses" if len(items) == 1 else "skills use", p,
-                            plural(len(set(provs(items))), "key"), join_names(skills)))
-        elif g == "agent-logins":
-            pass  # normal; shown only in details
+        group_lines, group_headline, group_subject = EXPLAIN[g](items)
         label = agent_label(items)
-        if several_agents and label and len(lines) > before:
-            line = lines[-1]
-            if line.startswith("URGENT: "):
-                lines[-1] = "URGENT: [%s] %s" % (label, line[len("URGENT: "):])
-            else:
-                lines[-1] = "[%s] %s" % (label, line)
+        for line in group_lines:
+            if several_agents and label:
+                line = ("URGENT: [%s] %s" % (label, line[len("URGENT: "):]) if line.startswith("URGENT: ")
+                        else "[%s] %s" % (label, line))
+            lines.append(line)
+        if group_headline and not subject:  # groups are in order of how bad, so the first one leads
+            headline, subject = group_headline, group_subject
 
-    worst = next((GROUPS[g]["level"] for g in by_group if GROUPS[g]["level"] != "info"), None)
-    status = {"urgent": "ACTION NEEDED", "high": "ACTION NEEDED", "medium": "WORTH FIXING"}.get(worst, "ALL CLEAR")
-    headline = make_headline(by_group, provs)
     # Name the agent in the headline only when it's about one of them; the
-    # tagged lines below say which agent each problem is in.
-    subject_agent = agent_label(headline_subject(by_group))
+    # tagged lines say which agent each problem is in.
+    subject_agent = agent_label(subject)
     if several_agents and subject_agent and " and " not in subject_agent:
         headline = name_agent(headline, subject_agent)
 
+    worst = next((GROUPS[g]["level"] for g in by_group if GROUPS[g]["level"] != "info"), None)
+    status = {"urgent": "ACTION NEEDED", "high": "ACTION NEEDED", "medium": "WORTH FIXING"}.get(worst, "ALL CLEAR")
+
     options = []
-    fixable_here = any(f["action"] in ("lock", "delete", "remove-line", "blank") and f["group"] != "app-keys"
-                       for f in audit.findings)
-    to_rotate = [f for f in audit.findings if f.get("rotate") and f["kind"] == "secret"]
-    swy = [f for f in audit.findings if f["kind"] == "secret" and f["group"] in ("app-keys", "shell", "skill-secret", "memory", "backups")
-           and f["provider"] in KNOWN_THIRD_PARTY and f["provider"] not in AGENT_OWN] + \
-        [f for f in audit.findings if f["group"] == "skill-keys"]
-    if fixable_here:
-        acts = {f["action"] for f in audit.findings if f["group"] != "app-keys"}
-        parts = []
-        if acts & {"delete", "remove-line", "blank"}:
-            parts.append("remove the stray copies of your keys")
-        if "lock" in acts:
-            parts.append("lock your files")
+    acts = {f["action"] for f in audit.findings if f["group"] != "app-keys"}
+    parts = []
+    if acts & {"delete", "remove-line", "blank"}:
+        parts.append("remove the stray copies of your keys")
+    if "lock" in acts:
+        parts.append("lock your files")
+    if parts:
         options.append("Clean up: %s. Your agent can do this for you, one step at a time." % " and ".join(parts))
+    to_rotate = [f for f in audit.findings if f.get("rotate") and f["kind"] == "secret"]
     if to_rotate:
         options.append("Replace the exposed keys: make new ones at %s and turn off the old ones. "
                        "This takes a few minutes each, on their websites." % join_names([nice(f["provider"]) for f in to_rotate], 4))
+    swy = [f for f in audit.findings if f["kind"] == "secret" and f["group"] in ("app-keys", "shell", "skill-secret", "memory", "backups")
+           and f["provider"] in KNOWN_THIRD_PARTY and f["provider"] not in AGENT_OWN] + \
+        [f for f in audit.findings if f["group"] == "skill-keys"]
     if swy:
-        options.append("Optional: let Swytchcode hold your app keys (%s), so your agent never has them "
-                       "and asks you before risky actions." % join_names(provs(swy), 4))
+        apps = join_names(provider_names(swy), 4)
+        agents = {f["platform"] for f in swy if f["platform"] != "shell"} or {p for p, _ in targets}
+        if audit.swytchcode_for and agents <= audit.swytchcode_for:
+            options.append("Swytchcode is installed for your agent: let it hold your %s keys too, "
+                           "so your agent never has them." % apps)
+        else:
+            options.append("Optional: let Swytchcode hold your app keys (%s), so your agent never has them "
+                           "and asks you before risky actions." % apps)
 
     return {
         "status": status,
@@ -787,67 +959,13 @@ def summarize(audit, targets):
                      sorted(audit.findings, key=lambda f: (list(GROUPS).index(f["group"]), f["path"], f["line"]))],
         "skills": audit.skills,
         "agents": [t[0] for t in targets],
+        "swytchcode_installed": bool(audit.swytchcode_for),
+        "swytchcode_installed_for": sorted(audit.swytchcode_for),
         "files_checked": sum(audit.scanned.values()),
         "notes": audit.notes,
         "version": __version__,
         "generated": datetime.now().isoformat(timespec="seconds"),
     }
-
-
-def first_prov(items):
-    """The provider a headline leads with: app keys before the agent's own, Stripe first."""
-    ps = [f.get("provider") for f in items if f.get("provider") not in (None, "-", "unknown")]
-    ps.sort(key=lambda p: (p in AGENT_OWN, p != "stripe"))
-    return ps[0] if ps else None
-
-
-def headline_subject(by_group):
-    """The findings the headline is about, so it can name the right agent."""
-    g = next((g for g in by_group if GROUPS[g]["level"] != "info"), None)
-    if not g:
-        return []
-    items = by_group[g]
-    if g in ("memory", "skill-secret", "app-keys", "shell"):
-        p = first_prov(items)
-        if p:
-            return [f for f in items if f.get("provider") == p]
-    return items
-
-
-def make_headline(by_group, provs):
-
-    def impact(p):
-        return PROVIDERS.get(p, (None, "use that account as you", None))[1]
-
-    if "memory" in by_group:
-        p = first_prov(by_group["memory"])
-        if p:
-            return ("Your %s key is saved in your agent's memory or chat history. Anyone who gets a copy of "
-                    "your agent's folder, including malware, can use it to %s." % (nice(p), impact(p)))
-        return ("Your agent's memory or chat history contains a key. Anyone who gets a copy of your "
-                "agent's folder, including malware, can use it.")
-    if "skill-secret" in by_group:
-        p = first_prov(by_group["skill-secret"])
-        return ("A skill you installed has %s key written inside it. Anyone with a copy of that skill can use it%s."
-                % ("your %s" % nice(p) if p else "a", " to " + impact(p) if p else ""))
-    if "skill-leak" in by_group:
-        return "Some of your skills can print your keys into the chat, where they get saved in your history."
-    if "open-files" in by_group:
-        return "Other accounts on this computer can open files that hold your keys."
-    if "app-keys" in by_group:
-        p = first_prov(by_group["app-keys"])
-        return ("Your %s key is sitting in plain text in your agent's settings. Malware that copies your "
-                "agent's folder can use it to %s." % (nice(p), impact(p)))
-    if "shell" in by_group:
-        p = first_prov(by_group["shell"])
-        return "Your %s key is in your terminal startup files, so every program you run can read it." % nice(p)
-    if "backups" in by_group:
-        return "Old backups of your agent still hold copies of your keys."
-    if "skill-keys" in by_group:
-        n = len(by_group["skill-keys"])
-        return ("Your agent holds your app keys for %d %s. If the agent is tricked, or its folder is "
-                "copied, those keys go with it." % (n, plural(n, "skill")))
-    return "No exposed keys found."
 
 
 def render_summary(rep):
