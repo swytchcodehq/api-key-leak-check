@@ -121,6 +121,14 @@ class FindsKeys(Base):
         self.write(".openclaw/workspace/MEMORY.md", "Example: sk_test_xxxxxxxxxxxxxxxxxxxxxxxx\n")
         self.assertEqual(self.audit_json()["status"], "ALL CLEAR")
 
+    def test_real_key_with_placeholder_letters_inside_is_found(self):
+        # A random key can contain "Your" or "xxxx" by chance; it's still a key.
+        k = "sk_live_" + rand(10) + "Your" + rand(10) + "xxxx" + rand(10)
+        self.planted.append(k)
+        self.write(".hermes/.env", "STRIPE_SECRET_KEY=%s\n" % k)
+        rep = self.audit_json()
+        self.assertEqual([f["provider"] for f in rep["findings"] if f["kind"] == "secret"], ["stripe"])
+
     def test_agents_own_locked_key_is_normal(self):
         self.write(".hermes/.env", "ANTHROPIC_API_KEY=%s\n" % self.key("sk-ant-api03-", 60))
         rep = self.audit_json()

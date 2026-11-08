@@ -4,6 +4,7 @@
 
 - Skills linked in instead of copied (as `npx skills add` can do) are checked too. Before, a linked skill folder was skipped, so a key inside it was missed. Link loops are handled.
 - Passwords shorter than 20 characters in settings and notes are found, such as `DB_PASSWORD=hunter22x`. References like `${DB_PASSWORD}`, setting names and code like `get_password()` are not flagged.
+- Real keys that happen to contain "your" or "xxxx" are no longer skipped as placeholders. About 1 in 6,000 random keys did; placeholder words now count only at the start of a word.
 - The description no longer says passwords are checked in chat history: only known key formats are.
 - README: pick Global when `npx skills add` asks for the installation scope.
 

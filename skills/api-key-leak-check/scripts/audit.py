@@ -84,8 +84,10 @@ CODE_EXT = {".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".go", ".sh"}
 # OpenClaw puts these workspace files into every prompt (by name, any case).
 OPENCLAW_PROMPT_FILES = {"agents", "soul", "tools", "identity", "user", "heartbeat", "bootstrap", "memory"}
 
-PLACEHOLDER_HINTS = ("your", "xxxx", "example", "changeme", "placeholder", "redacted", "dummy",
-                     "sample", "<", "${", "{{", "env:", "environ", "process.env", "****", "....")
+# Placeholder words count only at the start of a word ("your-key-here",
+# "sk_test_your_key"): a real random key can contain "Your" or "xxxx" by chance.
+PLACEHOLDER_WORDS = re.compile(r"(?i)(?:^|[^a-z0-9])(?:your|example|changeme|placeholder|redacted|dummy|sample)")
+PLACEHOLDER_MARKS = ("<", "${", "{{", "env:", "environ", "process.env", "****", "....", "xxxxxx", "XXXXXX")
 
 # Display names, what someone can do with the key, and where to replace it.
 PROVIDERS = {
@@ -231,8 +233,8 @@ def entropy(s):
 
 
 def looks_placeholder(value):
-    v = value.lower()
-    return any(h in v for h in PLACEHOLDER_HINTS) or len(set(value)) <= 4
+    return (bool(PLACEHOLDER_WORDS.search(value)) or any(h in value for h in PLACEHOLDER_MARKS)
+            or len(set(value)) <= 4)
 
 
 def describe_key(prov, raw):
