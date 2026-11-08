@@ -245,8 +245,124 @@ class Fixes(Base):
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
 
+class MoreWhere(Base):
+    def test_key_in_chat_database(self):
+        import sqlite3
+        os.makedirs(os.path.join(self.home, ".hermes"))
+        db = sqlite3.connect(os.path.join(self.home, ".hermes", "state.db"))
+        db.execute("create table messages (content text)")
+        db.execute("insert into messages values (?)", ("my token is %s" % self.key("ghp_", 36),))
+        db.commit()
+        db.close()
+        rep = self.audit_json()
+        found = [f for f in rep["findings"] if f["path"].endswith("state.db")]
+        self.assertEqual([(f["group"], f["action"]) for f in found], [("memory", "chat-db")])
+        self.assert_no_full_key(self.audit(), self.audit("--details"), json.dumps(rep))
+
+    def test_key_in_powershell_profile(self):
+        self.write(".hermes/memories/MEMORY.md", "notes\n")
+        self.write("Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+                   '$env:GITHUB_TOKEN = "%s"\n' % self.key("ghp_", 36))
+        self.assertIn("shell", {g["group"] for g in self.audit_json()["groups"]})
+
+    def test_markdown_report(self):
+        self.write(".hermes/memories/MEMORY.md", "github: %s\n" % self.key("ghp_", 36))
+        report = os.path.join(self.home, "report.md")
+        self.audit("--markdown", report)
+        with open(report, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("# Agent security check: action needed", text)
+        self.assertIn("## What we found", text)
+        self.assertIn("## Details", text)
+        self.assert_no_full_key(text)
+
+    def test_memory_says_sent_with_every_message(self):
+        self.write(".hermes/memories/MEMORY.md", "github: %s\n" % self.key("ghp_", 36))
+        self.assertIn("sent to your AI provider with every message", self.audit())
+
+    def test_chat_history_doesnt_claim_every_message(self):
+        self.write(".openclaw/agents/main/sessions/abc.jsonl",
+                   json.dumps({"content": "key %s" % self.key("sk_live_", 40)}) + "\n")
+        out = self.audit()
+        self.assertIn("chat history", out)
+        self.assertNotIn("every message", out)
+
+    def test_names_of_functions_are_not_keys(self):
+        self.write(".hermes/config.yaml", "token: refresh_token_from_store\nsecret: explain_skill_secret\n")
+        self.assertEqual(self.audit_json()["status"], "ALL CLEAR")
+
+
+@unittest.skipUnless(POSIX, "file permissions are only checked on macOS and Linux")
+class GroupAccess(unittest.TestCase):
+    """Ubuntu makes new files readable by the user's own private group."""
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("audit_under_test", AUDIT)
+        self.audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.audit)
+        fd, self.path = tempfile.mkstemp()
+        os.close(fd)
+        self.addCleanup(os.unlink, self.path)
+
+    def check(self, mode, group_has_others):
+        os.chmod(self.path, mode)
+        self.audit._GROUP_CACHE.clear()
+        self.audit.group_has_others = lambda gid: group_has_others
+        return self.audit.others_can_read(self.path)
+
+    def test_group_readable_with_only_me_in_group_is_fine(self):
+        self.assertFalse(self.check(0o640, group_has_others=False))
+
+    def test_group_readable_with_others_in_group_is_flagged(self):
+        self.assertTrue(self.check(0o640, group_has_others=True))
+
+    def test_readable_by_everyone_is_always_flagged(self):
+        self.assertTrue(self.check(0o644, group_has_others=False))
+
+    def test_locked_file_is_fine(self):
+        self.assertFalse(self.check(0o600, group_has_others=True))
+
+
+class AfterSwytchcode(Base):
+    OPERATOR = "---\nname: swytchcode-operator\ndescription: d\n---\nUse the swytchcode_* tools.\n"
+
+    def test_moved_skill_and_removed_key_is_all_clear(self):
+        self.write(".hermes/skills/swytchcode-operator/SKILL.md", self.OPERATOR)
+        self.write(".hermes/skills/billing/SKILL.md", "---\nname: billing\ndescription: b\n---\n"
+                   "Find the method with swytchcode_search, check it with swytchcode_info, "
+                   "then call it with swytchcode_exec.\n")
+        self.write(".hermes/.env", "OPENROUTER_API_KEY=%s\n" % self.key("sk-or-v1-", 64))
+        rep = self.audit_json()
+        self.assertEqual(rep["status"], "ALL CLEAR")
+        self.assertTrue(rep["swytchcode_installed"])
+
+    def test_says_already_set_up(self):
+        self.write(".hermes/skills/swytchcode-operator/SKILL.md", self.OPERATOR)
+        self.write(".hermes/.env", "NOTION_API_KEY=%s\n" % self.key("ntn_", 44))
+        out = self.audit()
+        self.assertIn("Swytchcode is already set up", out)
+        self.assertNotIn("Optional: let Swytchcode", out)
+
+    def test_offers_setup_when_not_installed(self):
+        self.write(".hermes/.env", "NOTION_API_KEY=%s\n" % self.key("ntn_", 44))
+        self.assertIn("Optional: let Swytchcode hold your app keys", self.audit())
+
+
+class Version(unittest.TestCase):
+    def test_versions_match(self):
+        with open(AUDIT, encoding="utf-8") as fh:
+            code = fh.read()
+        version = code.split('__version__ = "', 1)[1].split('"', 1)[0]
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as fh:
+            self.assertIn("\nversion: %s\n" % version, fh.read(), "SKILL.md version differs from audit.py")
+        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as fh:
+            self.assertIn("## %s " % version, fh.read(), "CHANGELOG.md has no entry for this version")
+
+
 class StaysOffline(unittest.TestCase):
-    ALLOWED = {"argparse", "hashlib", "json", "math", "os", "re", "stat", "sys", "collections",
+    # grp and pwd only look up which accounts share a file's group (macOS and Linux).
+    ALLOWED = {"argparse", "hashlib", "json", "math", "os", "re", "stat", "sys", "collections", "grp", "pwd",
                "datetime", "shutil", "tempfile", "audit"}
 
     def test_scripts_import_only_these_modules(self):

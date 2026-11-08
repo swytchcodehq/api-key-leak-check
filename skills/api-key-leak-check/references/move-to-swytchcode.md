@@ -21,7 +21,11 @@ If not, ask the user to install it. Don't install it yourself.
 
    For Hermes, use `--editor=hermes` instead of `--editor=openclaw`.
 
-Tell them: "It may ask you to sign in or answer a few questions. Follow what it says on screen, then tell me when it's done." Don't run these yourself. The Swytchcode tools work from your next message.
+Tell them: "It may ask you to sign in or answer a few questions. Follow what it says on screen, then tell me when it's done." Don't run these yourself.
+
+The agent loads the Swytchcode tools when it starts, so it has to start again:
+- Hermes: "Close Hermes and start it again with `hermes --continue`, so we carry on where we left off."
+- OpenClaw: "Paste `openclaw gateway restart` in the terminal, then ask me to carry on."
 
 ## 2. Check Swytchcode has the app
 
@@ -34,26 +38,28 @@ Call `swytchcode_connect` with the app. Send the user the result's `action.messa
 - For apps like Gmail or Slack, that's a sign-in page in their browser.
 - For apps that use a key, the user pastes the key into **their terminal** when asked. Never into this chat.
 
-Suggest they make a **new** key on the app's website for this, because the old one was exposed.
+Ask them to make a **new** key on the app's website and connect that one, because the old one was exposed. Tell them to keep the old key switched on for now: it's turned off in step 6, once Swytchcode's copy is proven to work. That way nothing stops working if a step goes wrong.
 
 ## 4. Remove the old copies
 
-**This step is required.** If an old copy of the key is left in the agent's files or the terminal startup files, it's still exposed, and it's used instead of the one Swytchcode holds.
+**This step is required, and it comes before the check in step 5.** An old copy left in the agent's files or the terminal startup files is still exposed. Worse, it's used instead of the one Swytchcode holds, so a check made while it's still there could pass with the old key and prove nothing.
 
 1. Run `audit.py --json` and find every finding for this app's key (`provider` is the app).
 2. Run `fix.py --dry-run <ids>`, tell the user what it will do, and after their yes, run `fix.py <ids>`.
 3. If an item can't be fixed by `fix.py`, tell the user what to do in plain words. For the agent's own settings, give them the exact command to copy.
-4. After a change to the agent's settings or `.env` file, the agent has to restart. OpenClaw: `openclaw gateway restart`. Hermes: start a new chat.
+4. The agent has to start again so the old key is gone from it too. Hermes: "Close Hermes and start it again with `hermes --continue`." OpenClaw: "Paste `openclaw gateway restart` in the terminal." If a key was in a terminal startup file, they also open a new terminal before starting the agent.
 
 ## 5. Check it works
 
-Make one call through Swytchcode that only reads something: `swytchcode_info`, then `swytchcode_exec` (for example, list one customer, or get the signed-in user). Tell the user the result in one line: "Done. Swytchcode is now holding your Stripe key, and it works."
+Make one call through Swytchcode that only reads something: `swytchcode_info`, then `swytchcode_exec` (for example, list one customer, or get the signed-in user). Now that the old copies are gone, this really uses the key Swytchcode holds. Tell the user the result in one line: "Done. Swytchcode is now holding your Stripe key, and it works."
 
-If it fails, tell them what went wrong and stop. Never go back to the old key.
+If it fails, tell them what went wrong and connect the new key again with `swytchcode_connect` (step 3). Don't put the old key back in the agent's files. Their old key still works at the app until step 6, so nothing is lost while you fix it.
 
 ## 6. Turn off the old key
 
-If they didn't make a new key in step 3, ask them to now: "Go to [link], make a new key and delete the old one." The links are in `audit.py --details`. Then connect the new key with `swytchcode_connect`.
+Only after step 5 worked. Ask them to delete the old key on the app's website: "Go to [link] and delete the old key. The new one in Swytchcode keeps working." The links are in `audit.py --details`.
+
+If they connected the old key in step 3 instead of a new one, ask them to make a new key now, connect it with `swytchcode_connect`, check it again (step 5), and then delete the old one.
 
 ## 7. Replace the skills that used the key
 
